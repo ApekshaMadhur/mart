@@ -9,9 +9,7 @@ import Reports from './pages/Reports';
 import Users from './pages/Users';
 
 // Dynamically target backend port 5000 when running client on Vite 5173 or other dev ports
-const API_URL = window.location.port && window.location.port !== '5000'
-  ? `${window.location.protocol}//${window.location.hostname}:5000`
-  : window.location.origin;
+const API_URL = "https://mart-juh9.onrender.com";
 
 export default function App() {
   const [user, setUser] = useState(() => {
