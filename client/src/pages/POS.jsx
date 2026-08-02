@@ -9,6 +9,7 @@ export default function POS({ token, user, API_URL, checkAuthFailure }) {
 
   // Scanner states
   const [scannerActive, setScannerActive] = useState(false);
+  const [cameraStarting, setCameraStarting] = useState(false);
   const [manualCode, setManualCode] = useState('');
   const [lookupError, setLookupError] = useState('');
   const [lastScannedInfo, setLastScannedInfo] = useState('');
@@ -22,7 +23,7 @@ export default function POS({ token, user, API_URL, checkAuthFailure }) {
   const [invoiceDetails, setInvoiceDetails] = useState(null);
 
   const html5QrcodeRef = useRef(null);
-  const scannerContainerRef = useRef('qr-reader-container');
+  const SCANNER_ELEMENT_ID = 'pos-qr-reader';
 
   useEffect(() => {
     fetchAllProducts();
@@ -47,28 +48,44 @@ export default function POS({ token, user, API_URL, checkAuthFailure }) {
 
   // ——— SCANNER LOGIC ———
   const startScanner = async () => {
+    setLookupError('');
+    setCameraStarting(true);
     try {
       if (html5QrcodeRef.current) {
-        await html5QrcodeRef.current.stop();
+        try { await html5QrcodeRef.current.stop(); } catch (e) {}
         html5QrcodeRef.current = null;
       }
 
-      const html5Qrcode = new Html5Qrcode(scannerContainerRef.current);
+      // html5-qrcode requires a string element ID (uses document.getElementById internally)
+      const html5Qrcode = new Html5Qrcode(SCANNER_ELEMENT_ID);
       html5QrcodeRef.current = html5Qrcode;
 
       await html5Qrcode.start(
         { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 250, height: 250 } },
+        { fps: 10, qrbox: { width: 220, height: 220 } },
         (decodedText) => {
           handleScanResult(decodedText);
         },
-        () => {} // ignore errors during scanning
+        () => {} // ignore per-frame decode errors
       );
 
       setScannerActive(true);
     } catch (err) {
       console.error('Scanner start error:', err);
-      setLookupError('Camera access denied or not available. Use manual entry instead.');
+      html5QrcodeRef.current = null;
+      // Provide a specific, actionable error message
+      const msg = err && err.message ? err.message.toLowerCase() : '';
+      if (msg.includes('permission') || msg.includes('denied') || msg.includes('notallowed')) {
+        setLookupError('📵 Camera permission denied. Please allow camera access in your browser settings and try again.');
+      } else if (msg.includes('notfound') || msg.includes('no camera') || msg.includes('devicenotfound')) {
+        setLookupError('📷 No camera found on this device. Use Manual Entry below.');
+      } else if (window.location.protocol === 'http:' && window.location.hostname !== 'localhost') {
+        setLookupError('🔒 Camera requires a secure (HTTPS) connection. Please access this page over HTTPS.');
+      } else {
+        setLookupError(`Camera error: ${err && err.message ? err.message : 'Unknown error'}. Use Manual Entry below.`);
+      }
+    } finally {
+      setCameraStarting(false);
     }
   };
 
@@ -549,21 +566,100 @@ export default function POS({ token, user, API_URL, checkAuthFailure }) {
 
             {/* Camera Scanner */}
             <div style={{marginBottom: '16px'}}>
-              <div id="qr-reader-container" style={{
+              {/* Scanner viewport — always rendered so html5-qrcode can mount into it */}
+              <div style={{
+                position: 'relative',
                 width: '100%',
-                borderRadius: 'var(--border-radius-sm)',
+                borderRadius: '12px',
                 overflow: 'hidden',
-                display: scannerActive ? 'block' : 'none',
-                marginBottom: '12px'
-              }}></div>
+                marginBottom: '12px',
+                background: '#0a0a0a',
+                height: scannerActive ? 'auto' : '0px',
+                minHeight: scannerActive ? '260px' : '0px',
+                transition: 'min-height 0.3s ease',
+              }}>
+                {/* The div html5-qrcode mounts into — must always be in DOM with a fixed ID */}
+                <div id="pos-qr-reader" style={{ width: '100%' }} />
 
-              <button
-                onClick={scannerActive ? stopScanner : startScanner}
-                className={`btn ${scannerActive ? 'btn-danger' : 'btn-primary'} w-full`}
-                style={{gap: '8px'}}
-              >
-                {scannerActive ? '⏹ Stop Camera' : '📷 Start Camera Scanner'}
-              </button>
+                {/* Scanning overlay frame */}
+                {scannerActive && (
+                  <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    pointerEvents: 'none',
+                  }}>
+                    <div style={{
+                      position: 'relative',
+                      width: '220px',
+                      height: '220px',
+                    }}>
+                      {/* Corner brackets */}
+                      {[['0','0','right','bottom'],['0','auto','right','auto'],['auto','0','auto','bottom'],['auto','auto','auto','auto']].map(([top, right, bottom, left], i) => (
+                        <span key={i} style={{
+                          position: 'absolute',
+                          top, right, bottom, left,
+                          width: '28px', height: '28px',
+                          borderColor: '#22c55e',
+                          borderStyle: 'solid',
+                          borderWidth: `${i<2?'3px':'0'} ${i%2===0?'3px':'0'} ${i>=2?'3px':'0'} ${i%2===1?'3px':'0'}`,
+                          borderRadius: i===0?'4px 0 0 0':i===1?'0 4px 0 0':i===2?'0 0 0 4px':'0 0 4px 0',
+                        }} />
+                      ))}
+                      {/* Animated scan line */}
+                      <div style={{
+                        position: 'absolute',
+                        left: '0',
+                        right: '0',
+                        height: '2px',
+                        background: 'linear-gradient(90deg, transparent, #22c55e, transparent)',
+                        animation: 'qrScanLine 1.8s ease-in-out infinite',
+                        boxShadow: '0 0 8px #22c55e',
+                      }} />
+                    </div>
+                    <div style={{
+                      position: 'absolute',
+                      bottom: '12px',
+                      color: 'rgba(255,255,255,0.75)',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      letterSpacing: '0.04em',
+                      textAlign: 'center',
+                      textShadow: '0 1px 3px rgba(0,0,0,0.8)',
+                    }}>Point camera at QR code or barcode</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Scan line animation keyframes injected once */}
+              <style>{`
+                @keyframes qrScanLine {
+                  0%   { top: 0%; }
+                  50%  { top: calc(100% - 2px); }
+                  100% { top: 0%; }
+                }
+              `}</style>
+
+              {scannerActive ? (
+                <button
+                  onClick={stopScanner}
+                  className="btn btn-danger w-full"
+                  style={{gap: '8px'}}
+                >
+                  ⏹ Stop Camera
+                </button>
+              ) : (
+                <button
+                  onClick={startScanner}
+                  disabled={cameraStarting}
+                  className="btn btn-primary w-full"
+                  style={{gap: '8px'}}
+                >
+                  {cameraStarting ? '⏳ Starting Camera...' : '📷 Start Camera Scanner'}
+                </button>
+              )}
             </div>
 
             {lastScannedInfo && (
